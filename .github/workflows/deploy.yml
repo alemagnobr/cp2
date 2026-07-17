@@ -23,7 +23,7 @@ jobs:
           cache: 'npm'
 
       - name: Instalar Dependências 🔧
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       - name: Compilar Projeto (Build) 🏗️
         run: npm run build
