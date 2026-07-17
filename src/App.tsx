@@ -796,16 +796,19 @@ export default function App() {
                     }}
                     className="flex items-center gap-1"
                   >
-                    <input
-                      type="number"
-                      value={newRuleVal}
-                      onChange={(e) => setNewRuleVal(e.target.value)}
-                      placeholder="+ R-X"
-                      className="w-14 bg-white text-slate-800 font-extrabold text-center py-0.5 px-1 rounded-lg border border-slate-200 text-xs outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all shadow-3xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                    />
+                    <div className="flex items-center bg-white border border-slate-200 rounded-lg shadow-3xs px-2 focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-500 transition-all">
+                      <span className="text-xs font-black text-slate-400 select-none">R-</span>
+                      <input
+                        type="number"
+                        value={newRuleVal}
+                        onChange={(e) => setNewRuleVal(e.target.value)}
+                        placeholder="30"
+                        className="w-10 bg-transparent text-slate-800 font-extrabold text-center py-0.5 px-0.5 text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                    </div>
                     <button
                       type="submit"
-                      className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-[10px] font-black px-2 py-0.5 rounded-lg transition-all cursor-pointer uppercase shadow-3xs hover:shadow-2xs"
+                      className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-[10px] font-black px-2 py-0.5 rounded-lg transition-all cursor-pointer uppercase shadow-3xs hover:shadow-2xs h-[24px] flex items-center justify-center"
                     >
                       Aplicar
                     </button>
