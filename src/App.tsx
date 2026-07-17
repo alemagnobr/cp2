@@ -794,7 +794,7 @@ export default function App() {
                         handleAddRule(val);
                       }
                     }}
-                    className="flex items-center"
+                    className="flex items-center gap-1"
                   >
                     <input
                       type="number"
@@ -803,6 +803,12 @@ export default function App() {
                       placeholder="+ R-X"
                       className="w-14 bg-white text-slate-800 font-extrabold text-center py-0.5 px-1 rounded-lg border border-slate-200 text-xs outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all shadow-3xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
+                    <button
+                      type="submit"
+                      className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-[10px] font-black px-2 py-0.5 rounded-lg transition-all cursor-pointer uppercase shadow-3xs hover:shadow-2xs"
+                    >
+                      Aplicar
+                    </button>
                   </form>
                 </div>
               </div>
