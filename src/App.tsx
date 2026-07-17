@@ -774,6 +774,92 @@ export default function App() {
 
   const activeAsset = assets.find(a => a.id === selectedAssetId) || { pair: 'EUR/USD', timeframe: 'D1' };
 
+  // --- Cálculo de Sequências de Anos (Streaks de Anos Positivos/Negativos) ---
+  const chronologicalData = [...data]
+    .filter(yearData => {
+      return yearData.months.some(m => parseNum(m.resultado) !== null || parseNum(m.ddMax) !== null);
+    })
+    .sort((a, b) => a.year - b.year);
+
+  // 1. Sequência para o Geral (Net Profit Geral)
+  let maxPosStreakGeral = 0;
+  let maxNegStreakGeral = 0;
+  let currentPosStreakGeral = 0;
+  let currentNegStreakGeral = 0;
+
+  let tempPosGeral = 0;
+  let tempNegGeral = 0;
+
+  chronologicalData.forEach(yearData => {
+    let totalRes = 0;
+    let totalOperacoes = 0;
+    yearData.months.forEach(m => {
+      const res = parseNum(m.resultado);
+      if (res !== null) totalRes += res;
+      const ops = parseNum(m.operacoes || '');
+      if (ops !== null) totalOperacoes += ops;
+    });
+    const totalSpreadCost = totalOperacoes * spreadVal;
+    const netRes = totalRes - totalSpreadCost;
+
+    if (netRes > 0) {
+      tempPosGeral++;
+      tempNegGeral = 0;
+      if (tempPosGeral > maxPosStreakGeral) maxPosStreakGeral = tempPosGeral;
+    } else if (netRes < 0) {
+      tempNegGeral++;
+      tempPosGeral = 0;
+      if (tempNegGeral > maxNegStreakGeral) maxNegStreakGeral = tempNegGeral;
+    } else {
+      tempPosGeral = 0;
+      tempNegGeral = 0;
+    }
+  });
+  currentPosStreakGeral = tempPosGeral;
+  currentNegStreakGeral = tempNegGeral;
+
+  // 2. Sequências para cada Regra R-X
+  const rxStreaks: Record<number, { maxPos: number; maxNeg: number; currentPos: number; currentNeg: number }> = {};
+  customRules.forEach(r => {
+    let maxPos = 0;
+    let maxNeg = 0;
+    let tempPos = 0;
+    let tempNeg = 0;
+
+    chronologicalData.forEach(yearData => {
+      let totalRXYearly = 0;
+      let totalOperacoes = 0;
+      yearData.months.forEach(m => {
+        const rxValue = calcRX(m.resultado, m.ddMax, r);
+        if (rxValue !== null) totalRXYearly += rxValue;
+        const ops = parseNum(m.operacoes || '');
+        if (ops !== null) totalOperacoes += ops;
+      });
+      const totalSpreadCost = totalOperacoes * spreadVal;
+      const netRX = totalRXYearly - totalSpreadCost;
+
+      if (netRX > 0) {
+        tempPos++;
+        tempNeg = 0;
+        if (tempPos > maxPos) maxPos = tempPos;
+      } else if (netRX < 0) {
+        tempNeg++;
+        tempPos = 0;
+        if (tempNeg > maxNeg) maxNeg = tempNeg;
+      } else {
+        tempPos = 0;
+        tempNeg = 0;
+      }
+    });
+
+    rxStreaks[r] = {
+      maxPos,
+      maxNeg,
+      currentPos: tempPos,
+      currentNeg: tempNeg
+    };
+  });
+
   if (!isLoaded) {
     return (
       <div className="p-8 text-center flex flex-col justify-center items-center min-h-screen text-slate-500 font-medium text-lg bg-slate-50 gap-3">
@@ -978,118 +1064,206 @@ export default function App() {
           </div>
         </header>
 
-        {/* --- Painel de KPI / Totais Gerais (Soma Geral) --- */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-5">
-          {/* Net Profit Card */}
-          {(() => {
-            const isBest = hasAnyData && bestGrandNet === grandNetResultado;
-            const isLowestRisk = hasAnyData && bestRiskStrategy === 'geral';
-            let borderClass = 'bg-white border-slate-200/80 border-l-4 border-l-emerald-500 bg-gradient-to-br from-emerald-50/20 via-white to-white';
-            if (isBest) {
-              borderClass = 'ring-2 ring-amber-500 border-amber-400 border-l-4 border-l-emerald-500 shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white';
-            } else if (isLowestRisk) {
-              borderClass = 'ring-2 ring-blue-500 border-blue-400 border-l-4 border-l-emerald-500 shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white';
-            }
+        {/* --- Painel de KPI / Totais Gerais (Soma Geral) & Sequências --- */}
+        <div className="space-y-3.5">
+          <div className="flex items-center gap-2 px-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse"></span>
+            <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">
+              Painel de Desempenho Geral & Sequências de Anos
+            </h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4 gap-4 lg:gap-5">
+            {/* Net Profit Card (Geral) */}
+            {(() => {
+              const isBest = hasAnyData && bestGrandNet === grandNetResultado;
+              const isLowestRisk = hasAnyData && bestRiskStrategy === 'geral';
+              let borderClass = 'bg-white border-slate-200/80 border-l-4 border-l-emerald-500 bg-gradient-to-br from-emerald-50/20 via-white to-white';
+              if (isBest) {
+                borderClass = 'ring-2 ring-amber-500 border-amber-400 border-l-4 border-l-emerald-500 shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white';
+              } else if (isLowestRisk) {
+                borderClass = 'ring-2 ring-blue-500 border-blue-400 border-l-4 border-l-emerald-500 shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white';
+              }
 
-            return (
-              <div className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}>
-                <div className="space-y-1.5 flex-1 min-w-0">
-                  {(isBest || isLowestRisk) && (
-                    <div className="flex flex-wrap gap-1 mb-1.5">
-                      {isBest && (
-                        <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
-                          <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
-                        </span>
+              return (
+                <div className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex flex-col justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}>
+                  <div className="flex items-start justify-between gap-3 w-full">
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      {(isBest || isLowestRisk) && (
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {isBest && (
+                            <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                              <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
+                            </span>
+                          )}
+                          {isLowestRisk && (
+                            <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                              <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
+                            </span>
+                          )}
+                        </div>
                       )}
-                      {isLowestRisk && (
-                        <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
-                          <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 truncate">Net Profit Geral ({activeAsset.pair})</span>
+                      </div>
+                      <h3 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetResultado >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {hasAnyData ? (grandNetResultado >= 0 ? '+' : '') + formatNum(grandNetResultado) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-400 leading-normal">
+                        Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalResultado)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span> <span className="text-slate-300">|</span> <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded font-mono text-[10px] font-bold">{grandTotalOperacoes} ops</span>
+                        {validYearsCount > 0 && (
+                          <>
+                            <span className="text-slate-300"> | </span>
+                            <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses['geral'])} pips</span></span>
+                          </>
+                        )}
+                      </p>
                     </div>
-                  )}
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500 truncate">Net Profit Geral ({activeAsset.pair})</span>
-                  </div>
-                  <h2 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetResultado >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {hasAnyData ? (grandNetResultado >= 0 ? '+' : '') + formatNum(grandNetResultado) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
-                  </h2>
-                  <p className="text-[11px] text-slate-400 leading-normal">
-                    Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalResultado)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span> <span className="text-slate-300">|</span> <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded font-mono text-[10px] font-bold">{grandTotalOperacoes} ops</span>
-                    {validYearsCount > 0 && (
-                      <>
-                        <span className="text-slate-300"> | </span>
-                        <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses['geral'])} pips</span></span>
-                      </>
-                    )}
-                  </p>
-                </div>
-                <div className={`p-3.5 rounded-xl ${grandNetResultado >= 0 ? 'bg-emerald-100/50 text-emerald-600' : 'bg-rose-100/50 text-rose-600'} transition-all shrink-0 ml-3`}>
-                  {grandNetResultado >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Dynamic Custom Rules Cards */}
-          {customRules.map((r, rIdx) => {
-            const grandTotalRXVal = grandTotalRX[r] || 0;
-            const grandNetRXVal = grandNetRX[r] || 0;
-            const isBest = hasAnyData && bestGrandNet === grandNetRXVal;
-            const isLowestRisk = hasAnyData && bestRiskStrategy === `r-${r}`;
-            const colorScheme = RULE_COLORS[rIdx % RULE_COLORS.length];
-
-            let borderClass = `bg-white border-slate-200/80 border-l-4 ${colorScheme.border} bg-gradient-to-br ${colorScheme.bg} via-white to-white`;
-            if (isBest) {
-              borderClass = `ring-2 ring-amber-500 border-amber-400 border-l-4 ${colorScheme.border} shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white`;
-            } else if (isLowestRisk) {
-              borderClass = `ring-2 ring-blue-500 border-blue-400 border-l-4 ${colorScheme.border} shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white`;
-            }
-
-            return (
-              <div 
-                key={`grand-card-r-${r}`}
-                className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}
-              >
-                <div className="space-y-1.5 flex-1 min-w-0">
-                  {(isBest || isLowestRisk) && (
-                    <div className="flex flex-wrap gap-1 mb-1.5">
-                      {isBest && (
-                        <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
-                          <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
-                        </span>
-                      )}
-                      {isLowestRisk && (
-                        <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
-                          <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
-                        </span>
-                      )}
+                    <div className={`p-3 rounded-xl ${grandNetResultado >= 0 ? 'bg-emerald-100/50 text-emerald-600' : 'bg-rose-100/50 text-rose-600'} transition-all shrink-0`}>
+                      {grandNetResultado >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
                     </div>
-                  )}
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-1.5 h-1.5 rounded-full ${colorScheme.dot}`}></span>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500 truncate">Soma R-{r} Total</span>
                   </div>
-                  <h2 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetRXVal >= 0 ? colorScheme.text : 'text-rose-600'}`}>
-                    {hasAnyData ? (grandNetRXVal >= 0 ? '+' : '') + formatNum(grandNetRXVal) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
-                  </h2>
-                  <p className="text-[11px] text-slate-400 leading-normal">
-                    Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalRXVal)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span>
-                    {validYearsCount > 0 && (
-                      <>
-                        <span className="text-slate-300"> | </span>
-                        <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses[`r-${r}`])} pips</span></span>
-                      </>
-                    )}
-                  </p>
+
+                  {/* Sequências de Anos (Streaks) */}
+                  <div className="mt-4 pt-3.5 border-t border-slate-100/90 grid grid-cols-2 gap-2.5 w-full">
+                    <div className="bg-emerald-50/45 border border-emerald-100/20 rounded-xl p-2.5 hover:bg-emerald-50/70 transition-colors">
+                      <div className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+                        Anos Positivos
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-500 font-semibold text-[10px]">Máx:</span>
+                          <span className="font-black text-emerald-700 font-mono">{maxPosStreakGeral} {maxPosStreakGeral === 1 ? 'ano' : 'anos'}</span>
+                        </div>
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-400 text-[10px]">Atual:</span>
+                          <span className="font-bold text-emerald-600 font-mono">{currentPosStreakGeral}y</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-rose-50/45 border border-rose-100/20 rounded-xl p-2.5 hover:bg-rose-50/70 transition-colors">
+                      <div className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-rose-500"></span>
+                        Anos Negativos
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-500 font-semibold text-[10px]">Máx:</span>
+                          <span className="font-black text-rose-700 font-mono">{maxNegStreakGeral} {maxNegStreakGeral === 1 ? 'ano' : 'anos'}</span>
+                        </div>
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-400 text-[10px]">Atual:</span>
+                          <span className="font-bold text-rose-600 font-mono">{currentNegStreakGeral}y</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className={`p-3.5 rounded-xl ${colorScheme.iconBg} shrink-0 ml-3`}>
-                  <Sliders size={24} />
+              );
+            })()}
+
+            {/* Dynamic Custom Rules Cards */}
+            {customRules.map((r, rIdx) => {
+              const grandTotalRXVal = grandTotalRX[r] || 0;
+              const grandNetRXVal = grandNetRX[r] || 0;
+              const isBest = hasAnyData && bestGrandNet === grandNetRXVal;
+              const isLowestRisk = hasAnyData && bestRiskStrategy === `r-${r}`;
+              const colorScheme = RULE_COLORS[rIdx % RULE_COLORS.length];
+              const streak = rxStreaks[r] || { maxPos: 0, maxNeg: 0, currentPos: 0, currentNeg: 0 };
+
+              let borderClass = `bg-white border-slate-200/80 border-l-4 ${colorScheme.border} bg-gradient-to-br ${colorScheme.bg} via-white to-white`;
+              if (isBest) {
+                borderClass = `ring-2 ring-amber-500 border-amber-400 border-l-4 ${colorScheme.border} shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white`;
+              } else if (isLowestRisk) {
+                borderClass = `ring-2 ring-blue-500 border-blue-400 border-l-4 ${colorScheme.border} shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white`;
+              }
+
+              return (
+                <div 
+                  key={`grand-card-r-${r}`}
+                  className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex flex-col justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}
+                >
+                  <div className="flex items-start justify-between gap-3 w-full">
+                    <div className="space-y-1.5 flex-1 min-w-0">
+                      {(isBest || isLowestRisk) && (
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {isBest && (
+                            <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                              <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
+                            </span>
+                          )}
+                          {isLowestRisk && (
+                            <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                              <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${colorScheme.dot}`}></span>
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 truncate">Soma R-{r} Total</span>
+                      </div>
+                      <h3 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetRXVal >= 0 ? colorScheme.text : 'text-rose-600'}`}>
+                        {hasAnyData ? (grandNetRXVal >= 0 ? '+' : '') + formatNum(grandNetRXVal) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-400 leading-normal">
+                        Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalRXVal)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span>
+                        {validYearsCount > 0 && (
+                          <>
+                            <span className="text-slate-300"> | </span>
+                            <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses[`r-${r}`])} pips</span></span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <div className={`p-3 rounded-xl ${colorScheme.iconBg} shrink-0`}>
+                      <Sliders size={20} />
+                    </div>
+                  </div>
+
+                  {/* Sequências de Anos (Streaks) */}
+                  <div className="mt-4 pt-3.5 border-t border-slate-100/90 grid grid-cols-2 gap-2.5 w-full">
+                    <div className="bg-emerald-50/45 border border-emerald-100/20 rounded-xl p-2.5 hover:bg-emerald-50/70 transition-colors">
+                      <div className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-emerald-500"></span>
+                        Anos Positivos
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-500 font-semibold text-[10px]">Máx:</span>
+                          <span className="font-black text-emerald-700 font-mono">{streak.maxPos} {streak.maxPos === 1 ? 'ano' : 'anos'}</span>
+                        </div>
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-400 text-[10px]">Atual:</span>
+                          <span className="font-bold text-emerald-600 font-mono">{streak.currentPos}y</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-rose-50/45 border border-rose-100/20 rounded-xl p-2.5 hover:bg-rose-50/70 transition-colors">
+                      <div className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                        <span className="w-1 h-1 rounded-full bg-rose-500"></span>
+                        Anos Negativos
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-500 font-semibold text-[10px]">Máx:</span>
+                          <span className="font-black text-rose-700 font-mono">{streak.maxNeg} {streak.maxNeg === 1 ? 'ano' : 'anos'}</span>
+                        </div>
+                        <div className="flex justify-between items-baseline text-xs">
+                          <span className="text-slate-400 text-[10px]">Atual:</span>
+                          <span className="font-bold text-rose-600 font-mono">{streak.currentNeg}y</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {/* --- Tabela Principal: Modernizada por Ano --- */}
