@@ -17,6 +17,7 @@ import {
   AlertCircle,
   TrendingDown,
   ShieldAlert,
+  Shield,
   ChevronUp,
   Sliders,
   DollarSign,
@@ -699,6 +700,61 @@ export default function App() {
 
   const bestGrandNet = hasAnyData ? Math.max(grandNetResultado, ...customRules.map(r => grandNetRX[r] || 0)) : null;
 
+  // Calcular Média de Perda (Drawdown Médio Anual) para identificar o Menor Risco
+  let bestRiskStrategy: string | null = null; // 'geral' ou `r-${r}`
+  const avgLosses: Record<string, number> = {};
+  let validYearsCount = 0;
+
+  let sumLossGeral = 0;
+  const sumLossRX: Record<number, number> = {};
+  customRules.forEach(r => {
+    sumLossRX[r] = 0;
+  });
+
+  data.forEach(yearData => {
+    let minDD: number | null = null;
+    yearData.months.forEach(m => {
+      const dd = parseNum(m.ddMax);
+      if (dd !== null) {
+        if (minDD === null || dd < minDD) minDD = dd;
+      }
+    });
+
+    if (minDD !== null) {
+      validYearsCount++;
+      sumLossGeral += minDD;
+      customRules.forEach(r => {
+        sumLossRX[r] += Math.max(minDD!, -r);
+      });
+    }
+  });
+
+  if (validYearsCount > 0) {
+    avgLosses['geral'] = sumLossGeral / validYearsCount;
+    customRules.forEach(r => {
+      avgLosses[`r-${r}`] = sumLossRX[r] / validYearsCount;
+    });
+
+    // Encontrar a estratégia com a maior média de drawdown (mais próxima de 0, ou seja, menor perda)
+    let maxAvg = -Infinity;
+    let selectedStrategy: string | null = null;
+
+    if (avgLosses['geral'] > maxAvg) {
+      maxAvg = avgLosses['geral'];
+      selectedStrategy = 'geral';
+    }
+
+    customRules.forEach(r => {
+      const key = `r-${r}`;
+      if (avgLosses[key] > maxAvg) {
+        maxAvg = avgLosses[key];
+        selectedStrategy = key;
+      }
+    });
+
+    bestRiskStrategy = selectedStrategy;
+  }
+
   const activeAsset = assets.find(a => a.id === selectedAssetId) || { pair: 'EUR/USD', timeframe: 'D1' };
 
   if (!isLoaded) {
@@ -900,67 +956,110 @@ export default function App() {
         {/* --- Painel de KPI / Totais Gerais (Soma Geral) --- */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-5">
           {/* Net Profit Card */}
-          <div className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${
-            hasAnyData && bestGrandNet === grandNetResultado
-              ? 'ring-2 ring-amber-500 border-amber-400 border-l-4 border-l-emerald-500 shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white' 
-              : 'bg-white border-slate-200/80 border-l-4 border-l-emerald-500 bg-gradient-to-br from-emerald-50/20 via-white to-white'
-          }`}>
-            {hasAnyData && bestGrandNet === grandNetResultado && (
-              <span className="absolute top-2 right-2.5 bg-amber-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs tracking-wider">
-                <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
-              </span>
-            )}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Net Profit Geral ({activeAsset.pair})</span>
+          {(() => {
+            const isBest = hasAnyData && bestGrandNet === grandNetResultado;
+            const isLowestRisk = hasAnyData && bestRiskStrategy === 'geral';
+            let borderClass = 'bg-white border-slate-200/80 border-l-4 border-l-emerald-500 bg-gradient-to-br from-emerald-50/20 via-white to-white';
+            if (isBest) {
+              borderClass = 'ring-2 ring-amber-500 border-amber-400 border-l-4 border-l-emerald-500 shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white';
+            } else if (isLowestRisk) {
+              borderClass = 'ring-2 ring-blue-500 border-blue-400 border-l-4 border-l-emerald-500 shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white';
+            }
+
+            return (
+              <div className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}>
+                <div className="space-y-1.5 flex-1 min-w-0">
+                  {(isBest || isLowestRisk) && (
+                    <div className="flex flex-wrap gap-1 mb-1.5">
+                      {isBest && (
+                        <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                          <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
+                        </span>
+                      )}
+                      {isLowestRisk && (
+                        <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                          <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500 truncate">Net Profit Geral ({activeAsset.pair})</span>
+                  </div>
+                  <h2 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetResultado >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {hasAnyData ? (grandNetResultado >= 0 ? '+' : '') + formatNum(grandNetResultado) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
+                  </h2>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalResultado)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span> <span className="text-slate-300">|</span> <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded font-mono text-[10px] font-bold">{grandTotalOperacoes} ops</span>
+                    {validYearsCount > 0 && (
+                      <>
+                        <span className="text-slate-300"> | </span>
+                        <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses['geral'])} pips</span></span>
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className={`p-3.5 rounded-xl ${grandNetResultado >= 0 ? 'bg-emerald-100/50 text-emerald-600' : 'bg-rose-100/50 text-rose-600'} transition-all shrink-0 ml-3`}>
+                  {grandNetResultado >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
+                </div>
               </div>
-              <h2 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetResultado >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {hasAnyData ? (grandNetResultado >= 0 ? '+' : '') + formatNum(grandNetResultado) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
-              </h2>
-              <p className="text-[11px] text-slate-400 leading-normal">
-                Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalResultado)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span> <span className="text-slate-300">|</span> <span className="bg-slate-100 text-slate-600 px-1 py-0.5 rounded font-mono text-[10px] font-bold">{grandTotalOperacoes} ops</span>
-              </p>
-            </div>
-            <div className={`p-3.5 rounded-xl ${grandNetResultado >= 0 ? 'bg-emerald-100/50 text-emerald-600' : 'bg-rose-100/50 text-rose-600'} transition-all`}>
-              {grandNetResultado >= 0 ? <TrendingUp size={24} /> : <TrendingDown size={24} />}
-            </div>
-          </div>
+            );
+          })()}
 
           {/* Dynamic Custom Rules Cards */}
           {customRules.map((r, rIdx) => {
             const grandTotalRXVal = grandTotalRX[r] || 0;
             const grandNetRXVal = grandNetRX[r] || 0;
             const isBest = hasAnyData && bestGrandNet === grandNetRXVal;
+            const isLowestRisk = hasAnyData && bestRiskStrategy === `r-${r}`;
             const colorScheme = RULE_COLORS[rIdx % RULE_COLORS.length];
+
+            let borderClass = `bg-white border-slate-200/80 border-l-4 ${colorScheme.border} bg-gradient-to-br ${colorScheme.bg} via-white to-white`;
+            if (isBest) {
+              borderClass = `ring-2 ring-amber-500 border-amber-400 border-l-4 ${colorScheme.border} shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white`;
+            } else if (isLowestRisk) {
+              borderClass = `ring-2 ring-blue-500 border-blue-400 border-l-4 ${colorScheme.border} shadow-md shadow-blue-100/50 bg-gradient-to-br from-blue-50/10 via-white to-white`;
+            }
 
             return (
               <div 
                 key={`grand-card-r-${r}`}
-                className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${
-                  isBest
-                    ? `ring-2 ring-amber-500 border-amber-400 border-l-4 ${colorScheme.border} shadow-md shadow-amber-100/50 bg-gradient-to-br from-amber-50/10 via-white to-white` 
-                    : `bg-white border-slate-200/80 border-l-4 ${colorScheme.border} bg-gradient-to-br ${colorScheme.bg} via-white to-white`
-                }`}
+                className={`relative overflow-hidden p-5 rounded-2xl shadow-xs border flex items-center justify-between group hover:shadow-md hover:border-slate-350 transition-all ${borderClass}`}
               >
-                {isBest && (
-                  <span className="absolute top-2 right-2.5 bg-amber-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs tracking-wider">
-                    <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
-                  </span>
-                )}
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 flex-1 min-w-0">
+                  {(isBest || isLowestRisk) && (
+                    <div className="flex flex-wrap gap-1 mb-1.5">
+                      {isBest && (
+                        <span className="bg-amber-500 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                          <Trophy size={10} className="fill-current shrink-0 text-amber-100" /> Melhor Resultado
+                        </span>
+                      )}
+                      {isLowestRisk && (
+                        <span className="bg-blue-600 text-white text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 shadow-xs tracking-wider shrink-0">
+                          <Shield size={10} className="shrink-0 text-blue-100" /> Menor Risco
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${colorScheme.dot}`}></span>
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Soma R-{r} Total</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500 truncate">Soma R-{r} Total</span>
                   </div>
                   <h2 className={`text-2xl lg:text-3xl font-black tracking-tight font-sans ${grandNetRXVal >= 0 ? colorScheme.text : 'text-rose-600'}`}>
                     {hasAnyData ? (grandNetRXVal >= 0 ? '+' : '') + formatNum(grandNetRXVal) : '0'} <span className="text-xs font-bold text-slate-400 font-mono">pips</span>
                   </h2>
                   <p className="text-[11px] text-slate-400 leading-normal">
                     Bruto: <span className="font-semibold text-slate-600">{formatNum(grandTotalRXVal)}</span> | Custo Spread: <span className="font-semibold text-rose-500">-{formatNum(grandTotalSpreadCost)}</span>
+                    {validYearsCount > 0 && (
+                      <>
+                        <span className="text-slate-300"> | </span>
+                        <span className="inline-flex items-center gap-0.5">DD Médio: <span className="font-bold text-rose-600 font-mono">{formatNum(avgLosses[`r-${r}`])} pips</span></span>
+                      </>
+                    )}
                   </p>
                 </div>
-                <div className={`p-3.5 rounded-xl ${colorScheme.iconBg}`}>
+                <div className={`p-3.5 rounded-xl ${colorScheme.iconBg} shrink-0 ml-3`}>
                   <Sliders size={24} />
                 </div>
               </div>
