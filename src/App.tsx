@@ -22,11 +22,13 @@ import {
   DollarSign,
   Maximize2,
   Trophy,
-  Sparkles
+  Sparkles,
+  Eraser
 } from 'lucide-react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
 import { doc, onSnapshot, setDoc, collection } from 'firebase/firestore';
+import { GoogleGenAI, Type } from "@google/genai";
 
 // --- Tipos e Enums de Erro para Firebase ---
 enum OperationType {
@@ -269,6 +271,182 @@ export default function App() {
 
   const [showNewYearModal, setShowNewYearModal] = useState(false);
   const [newYearValue, setNewYearValue] = useState<string>(String(new Date().getFullYear()));
+
+  // Estados da IA do Gemini
+  const [showGeminiModal, setShowGeminiModal] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('pip-tracker-gemini-api-key') || '';
+  });
+  
+  const [showAiAutofillModal, setShowAiAutofillModal] = useState(false);
+  const [aiAutofillYear, setAiAutofillYear] = useState<number | null>(null);
+  const [aiText, setAiText] = useState<string>('');
+  const [aiFileContent, setAiFileContent] = useState<string>('');
+  const [aiFileName, setAiFileName] = useState<string>('');
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiError, setAiError] = useState<string>('');
+  const [isDragActive, setIsDragActive] = useState<boolean>(false);
+
+  const handleOpenAiAutofill = (year: number) => {
+    setAiAutofillYear(year);
+    setAiText('');
+    setAiFileContent('');
+    setAiFileName('');
+    setAiError('');
+    setShowAiAutofillModal(true);
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setIsDragActive(true);
+    } else if (e.type === "dragleave") {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+    
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      setAiFileName(file.name);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setAiFileContent(event.target?.result as string || '');
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleProcessWithAi = async () => {
+    const apiKeyToUse = geminiApiKey || localStorage.getItem('pip-tracker-gemini-api-key') || '';
+    if (!apiKeyToUse.trim()) {
+      setAiError("Por favor, configure sua chave de API do Gemini no botão superior antes de usar o preenchimento automático.");
+      return;
+    }
+    
+    const inputSource = aiFileContent || aiText;
+    if (!inputSource.trim()) {
+      setAiError("Por favor, envie um arquivo ou digite algum dado no campo de texto para a IA processar.");
+      return;
+    }
+    
+    setAiLoading(true);
+    setAiError('');
+    
+    try {
+      const aiClient = new GoogleGenAI({ 
+        apiKey: apiKeyToUse,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+      
+      const prompt = `Analise os seguintes dados e extraia o resultado de pips (resultado), drawdown máximo (ddMax), e quantidade de operações (operacoes) para cada mês do ano ${aiAutofillYear}.
+Siga estritamente as regras de conversão:
+1. resultado: Valor de ganho/perda em pips. Formate como string decimal (ex: "150.5" ou "-25.2"). Se não houver dados, use "".
+2. ddMax: Drawdown máximo em pips para o mês. DEVE SER um valor negativo (ex: "-50" ou "-15"). Se não houver dados, use "".
+3. operacoes: Quantidade de operações feitas no mês. Deve ser um número inteiro como string (ex: "12"). Se não houver dados, use "".
+4. O campo "monthIndex" deve ser um número inteiro de 0 a 11 representando o mês correspondente (0 para Jan, 1 para Fev, ..., 11 para Dez).
+
+Dados brutos fornecidos pelo usuário:
+"""
+${inputSource}
+"""`;
+
+      const response = await aiClient.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "Você é um especialista em análise de planilhas de trading e extração de dados financeiros. Extraia com precisão os valores mensais solicitados de pips, drawdown (sempre negativo) e número de operações de acordo com o JSON schema especificado.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              months: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    monthIndex: {
+                      type: Type.INTEGER,
+                      description: "Month index de 0 a 11 (0 para Janeiro, 11 para Dezembro)"
+                    },
+                    resultado: {
+                      type: Type.STRING,
+                      description: "Resultado líquido em pips para o mês (ex: '120.5' ou '-45'). Vazio se não houver dados."
+                    },
+                    ddMax: {
+                      type: Type.STRING,
+                      description: "Drawdown máximo em pips. DEVE ser negativo (ex: '-30.5' ou '-10'). Vazio se não houver dados."
+                    },
+                    operacoes: {
+                      type: Type.STRING,
+                      description: "Quantidade total de operações no mês (ex: '20' ou '5'). Vazio se não houver dados."
+                    }
+                  },
+                  required: ["monthIndex", "resultado", "ddMax", "operacoes"]
+                }
+              }
+            },
+            required: ["months"]
+          }
+        }
+      });
+      
+      const responseText = response.text;
+      if (!responseText) {
+        throw new Error("Nenhuma resposta recebida do modelo do Gemini.");
+      }
+      
+      const parsed = JSON.parse(responseText.trim());
+      if (parsed && Array.isArray(parsed.months)) {
+        const newData = [...data];
+        const targetYearIndex = newData.findIndex(d => d.year === aiAutofillYear);
+        if (targetYearIndex !== -1) {
+          const yearObj = { ...newData[targetYearIndex] };
+          
+          // Clonar os meses existentes para evitar mutação direta
+          const updatedMonths = [...yearObj.months];
+          
+          parsed.months.forEach((m: { monthIndex: number; resultado: string; ddMax: string; operacoes?: string }) => {
+            if (m.monthIndex >= 0 && m.monthIndex < 12) {
+              updatedMonths[m.monthIndex] = {
+                resultado: m.resultado || '',
+                ddMax: m.ddMax || '',
+                operacoes: m.operacoes || ''
+              };
+            }
+          });
+          
+          yearObj.months = updatedMonths;
+          newData[targetYearIndex] = yearObj;
+          
+          handleDataChange(newData);
+          setShowAiAutofillModal(false);
+          setAiText('');
+          setAiFileContent('');
+          setAiFileName('');
+          alert(`Métricas do ano de ${aiAutofillYear} atualizadas com preenchimento inteligente da IA com sucesso!`);
+        } else {
+          throw new Error(`O ano ${aiAutofillYear} não foi encontrado na planilha atual.`);
+        }
+      } else {
+        throw new Error("A IA gerou um formato inválido de dados. Tente novamente.");
+      }
+    } catch (err: any) {
+      console.error("Erro no processamento com Gemini:", err);
+      setAiError(err.message || "Ocorreu um erro ao comunicar com a API do Gemini. Verifique se sua chave de API está correta.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const saveTimeoutRef = useRef<any>(null);
 
@@ -609,6 +787,21 @@ export default function App() {
     }
   };
 
+  const handleClearYearData = (yearNum: number) => {
+    if (window.confirm(`Tem certeza que deseja LIMPAR todos os dados do ano de ${yearNum}? Os valores de resultado, ddMax e operações de todos os meses serão redefinidos para vazio.`)) {
+      const newData = data.map(d => {
+        if (d.year === yearNum) {
+          return {
+            ...d,
+            months: Array.from({ length: 12 }, () => ({ resultado: '', ddMax: '', operacoes: '' }))
+          };
+        }
+        return d;
+      });
+      handleDataChange(newData);
+    }
+  };
+
   const toggleYearCollapse = (yearNum: number) => {
     setCollapsedYears(prev => {
       const currentlyCollapsed = prev[yearNum] !== false;
@@ -856,6 +1049,15 @@ export default function App() {
             </button>
             
             <button 
+              onClick={() => setShowGeminiModal(true)}
+              className="flex items-center gap-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 px-3.5 py-2 rounded-xl transition-all text-sm font-bold cursor-pointer shadow-3xs"
+              title="Configurar chave de API do Gemini para rodar na Github Pages"
+            >
+              <Sparkles size={14} className="text-purple-600 animate-pulse" />
+              <span>Configurar Gemini</span>
+            </button>
+
+            <button 
               onClick={clearData}
               className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 text-slate-600 border border-slate-200/40 px-3.5 py-2 rounded-xl transition-all text-sm font-bold cursor-pointer"
               title="Apagar dados e reiniciar"
@@ -1094,6 +1296,26 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      {/* Botão de Preenchimento Automático com IA */}
+                      <button 
+                        onClick={() => handleOpenAiAutofill(yearData.year)}
+                        className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-xl transition-all text-xs font-bold cursor-pointer hover:scale-[1.02] shadow-xs shrink-0 mr-1"
+                        title="Preencher dados deste ano automaticamente com IA"
+                      >
+                        <Sparkles size={13} className="animate-pulse" />
+                        <span>Preenchimento Automático</span>
+                      </button>
+
+                      {/* Botão de Limpar Dados do Ano */}
+                      <button 
+                        onClick={() => handleClearYearData(yearData.year)}
+                        className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-xl transition-all text-xs font-bold cursor-pointer hover:scale-[1.02]"
+                        title="Limpar todos os dados deste ano"
+                      >
+                        <Eraser size={13} />
+                        <span>Limpar</span>
+                      </button>
+
                       {/* Botão de Excluir Ano */}
                       <button 
                         onClick={() => handleDeleteYear(yearData.year)}
@@ -1492,6 +1714,254 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Configurar Chave Gemini */}
+      {showGeminiModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-5">
+            <div className="flex items-center gap-2.5 text-purple-600">
+              <Sparkles size={22} className="shrink-0" />
+              <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">Chave de API do Gemini</h3>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-slate-500 text-sm leading-relaxed">
+                Insira sua chave de API do Gemini abaixo para habilitar o preenchimento automático inteligente mesmo quando estiver no GitHub Pages ou offline.
+              </p>
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Sua Gemini API Key</label>
+                <input
+                  type="password"
+                  placeholder="AIzaSy..."
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 outline-none font-mono text-slate-700"
+                />
+              </div>
+
+              <div className="bg-purple-50 p-3.5 rounded-xl border border-purple-100 flex gap-2.5 text-purple-900 text-xs leading-relaxed">
+                <AlertCircle size={18} className="shrink-0 text-purple-500 mt-0.5" />
+                <span>Esta chave será salva apenas no armazenamento local do seu próprio navegador (localStorage). Ela nunca é enviada a nenhum outro servidor que não seja a própria API oficial da Google.</span>
+              </div>
+
+              <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGeminiApiKey('');
+                    localStorage.removeItem('pip-tracker-gemini-api-key');
+                    alert("Chave de API removida do armazenamento local.");
+                  }}
+                  className="text-xs font-bold text-rose-500 hover:text-rose-600 transition-colors cursor-pointer"
+                >
+                  Limpar Chave
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowGeminiModal(false)}
+                    className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100 cursor-pointer transition-colors"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.setItem('pip-tracker-gemini-api-key', geminiApiKey.trim());
+                      setShowGeminiModal(false);
+                      alert("Chave de API do Gemini salva com sucesso!");
+                    }}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-500/10 cursor-pointer transition-colors"
+                  >
+                    Salvar Chave
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Preenchimento Automático com IA */}
+      {showAiAutofillModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5 text-purple-600">
+                <Sparkles size={22} className="shrink-0 animate-pulse" />
+                <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">Preenchimento Automático com IA — {aiAutofillYear}</h3>
+              </div>
+              <button 
+                onClick={() => setShowAiAutofillModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+
+            {aiError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 p-3.5 rounded-xl text-xs flex gap-2 items-start">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{aiError}</span>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {/* Seção de Chave Rápida se não houver chave */}
+              {!geminiApiKey && !localStorage.getItem('pip-tracker-gemini-api-key') && (
+                <div className="bg-purple-50 border border-purple-200 p-4 rounded-xl space-y-2.5">
+                  <div className="flex items-center gap-2 text-purple-800 font-bold text-xs uppercase tracking-wider">
+                    <AlertCircle size={14} className="text-purple-600" />
+                    <span>Requer Chave de API do Gemini</span>
+                  </div>
+                  <p className="text-slate-600 text-xs leading-relaxed">
+                    Você precisa configurar sua chave de API para habilitar a IA. É 100% gratuito e você pode gerar uma no <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-purple-700 font-extrabold underline hover:text-purple-800">Google AI Studio</a>.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      placeholder="Cole sua chave de API do Gemini aqui..."
+                      value={geminiApiKey}
+                      onChange={(e) => setGeminiApiKey(e.target.value)}
+                      className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 font-mono text-slate-700"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        localStorage.setItem('pip-tracker-gemini-api-key', geminiApiKey.trim());
+                        alert("Chave de API salva com sucesso!");
+                      }}
+                      className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3.5 py-1.5 rounded-lg shadow-sm cursor-pointer"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Zona de Drag & Drop */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-extrabold text-slate-400 uppercase tracking-wider">Opção 1: Enviar Arquivo (txt, csv, json, log)</label>
+                  <div
+                    onDragEnter={handleDrag}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-2xl p-6 text-center flex flex-col items-center justify-center gap-2.5 transition-all h-[200px] cursor-pointer ${
+                      isDragActive 
+                        ? 'border-purple-500 bg-purple-50/50' 
+                        : aiFileName 
+                          ? 'border-emerald-500 bg-emerald-50/20' 
+                          : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                    }`}
+                    onClick={() => document.getElementById('ai-file-input')?.click()}
+                  >
+                    <input
+                      type="file"
+                      id="ai-file-input"
+                      className="hidden"
+                      accept=".txt,.csv,.json,.log,.md"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setAiFileName(file.name);
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            setAiFileContent(event.target?.result as string);
+                          };
+                          reader.readAsText(file);
+                        }
+                      }}
+                    />
+                    
+                    {aiFileName ? (
+                      <>
+                        <div className="bg-emerald-100 text-emerald-700 p-2.5 rounded-xl">
+                          <Plus size={20} className="rotate-45" />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs font-bold text-slate-700 truncate max-w-[200px]">{aiFileName}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold uppercase">Arquivo carregado com sucesso</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAiFileName('');
+                            setAiFileContent('');
+                          }}
+                          className="text-[10px] font-bold text-rose-500 hover:text-rose-600 hover:underline"
+                        >
+                          Remover arquivo
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="bg-slate-100 text-slate-500 p-2.5 rounded-xl">
+                          <Download size={20} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-bold text-slate-700">Arraste seu arquivo aqui</p>
+                          <p className="text-[10px] text-slate-400">ou clique para procurar no dispositivo</p>
+                        </div>
+                        <p className="text-[9px] text-slate-400/80 font-medium">Aceita .txt, .csv, .json, .md, .log</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Área de Digitação de Dados */}
+                <div className="space-y-2 flex flex-col">
+                  <label className="block text-xs font-extrabold text-slate-400 uppercase tracking-wider">Opção 2: Digitar ou colar dados brutos</label>
+                  <textarea
+                    placeholder="Exemplo:&#10;Janeiro: +120 pips, dd -30, 14 operacoes&#10;Fev: resultado de -25 pips e ddMax -15, 8 ops&#10;Março: lucrou 80.5 pips com drawdown de -10 pips, 19 ops"
+                    value={aiText}
+                    onChange={(e) => setAiText(e.target.value)}
+                    disabled={!!aiFileName}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500 font-mono text-slate-700 h-[200px] resize-none disabled:opacity-50 placeholder-slate-400"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60 text-xs text-slate-500 space-y-1.5 leading-relaxed">
+                <p className="font-bold text-slate-600">💡 Dica para melhores resultados:</p>
+                <p>Nossa IA é alimentada pelo Gemini 3.5 Flash e lê com extrema precisão relatórios brutos do MetaTrader, diários de trade em formato texto ou tabelas copiadas do Excel. Certifique-se de incluir valores de <strong>pips</strong> (resultado), <strong>drawdown máximo</strong> (ddMax, ex: -50 pips) e <strong>quantidade de operações</strong> de cada mês correspondente para que o mapeamento de riscos ocorra perfeitamente!</p>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAiAutofillModal(false)}
+                  disabled={aiLoading}
+                  className="px-5 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleProcessWithAi}
+                  disabled={aiLoading || (!aiText.trim() && !aiFileContent.trim())}
+                  className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-xs font-bold shadow-md shadow-purple-500/10 cursor-pointer flex items-center gap-2"
+                >
+                  {aiLoading ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Processando com IA...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={13} />
+                      <span>Preencher Automaticamente</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
