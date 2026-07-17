@@ -1,0 +1,20 @@
+{
+  "entities": {
+    "AssetPips": {
+      "title": "Asset Pips",
+      "description": "Dados de controle de pips para uma paridade e timeframe específico.",
+      "type": "object",
+      "properties": {
+        "pair": { "type": "string" },
+        "timeframe": { "type": "string" },
+        "data": { "type": "array" }
+      }
+    }
+  },
+  "firestore": {
+    "/shared_assets/{assetId}": {
+      "schema": "AssetPips",
+      "description": "Dados globais e colaborativos de pips para ativos específicos"
+    }
+  }
+}

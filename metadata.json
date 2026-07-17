@@ -1,0 +1,6 @@
+{
+  "name": "Controle de Pips EUR/USD",
+  "description": "Controle e análise colaborativa em tempo real de pips, ganhos, perdas e drawdown máximo para o mercado financeiro (par EUR/USD D1).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
