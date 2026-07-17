@@ -24,8 +24,22 @@ import {
   Maximize2,
   Trophy,
   Sparkles,
-  Eraser
+  Eraser,
+  BarChart3
 } from 'lucide-react';
+import { 
+  ResponsiveContainer, 
+  BarChart, 
+  Bar, 
+  LineChart,
+  Line,
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend, 
+  ReferenceLine 
+} from 'recharts';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
 import { doc, onSnapshot, setDoc, collection } from 'firebase/firestore';
@@ -230,6 +244,7 @@ const getInitialDefaultData = (): YearData[] => {
 export default function App() {
   const [data, setData] = useState<YearData[]>([]);
   const [spread, setSpread] = useState<string>('1.0');
+  const [selectedScenarios, setSelectedScenarios] = useState<Record<string, boolean>>({});
   const [posStreakThreshold, setPosStreakThreshold] = useState<string>(() => {
     return localStorage.getItem('pip-tracker-pos-streak-threshold') || '30';
   });
@@ -275,6 +290,8 @@ export default function App() {
 
   // Estados da IA do Gemini
   const [showGeminiModal, setShowGeminiModal] = useState(false);
+  const [showChartsModal, setShowChartsModal] = useState(false);
+  const [activeChartTab, setActiveChartTab] = useState<'bars' | 'lines'>('bars');
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
     return localStorage.getItem('pip-tracker-gemini-api-key') || '';
   });
@@ -932,6 +949,14 @@ export default function App() {
               className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl transition-all text-sm font-bold shadow-sm shadow-emerald-500/10 cursor-pointer"
             >
               <Plus size={15} /> Registrar Ano
+            </button>
+
+            <button 
+              onClick={() => setShowChartsModal(true)}
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl transition-all text-sm font-bold shadow-sm shadow-indigo-500/10 cursor-pointer"
+              title="Visualizar gráfico de lucros e perdas ano a ano para todos os cenários"
+            >
+              <BarChart3 size={15} /> Acessar Gráficos
             </button>
             
             <button 
@@ -1700,6 +1725,385 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Gráficos de Performance */}
+      {showChartsModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex justify-center items-center z-50 p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-5xl w-full p-6 flex flex-col max-h-[90vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4 shrink-0">
+              <div className="flex items-center gap-2.5 text-indigo-600">
+                <BarChart3 size={24} className="shrink-0" />
+                <div>
+                  <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">Comparativo de Performance Ano a Ano</h3>
+                  <p className="text-slate-400 text-xs font-semibold">Do ano mais antigo ao mais recente • Valores líquidos em pips (com spread)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowChartsModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold p-1 px-2.5 rounded-lg hover:bg-slate-50 transition-all cursor-pointer text-sm"
+              >
+                &times; Fechar
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto py-5 space-y-6 pr-1">
+              {(() => {
+                // Filtrar anos que possuam algum dado preenchido para não poluir o gráfico
+                const validYears = data.filter(yearData => {
+                  return yearData.months.some(m => parseNum(m.resultado) !== null || parseNum(m.ddMax) !== null);
+                });
+
+                if (validYears.length === 0) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
+                      <div className="p-4 bg-slate-50 text-slate-400 rounded-full">
+                        <BarChart3 size={40} className="stroke-1" />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="font-bold text-slate-700 text-base">Sem dados suficientes</h4>
+                        <p className="text-xs text-slate-400 max-w-sm mx-auto">Preencha os resultados de pelo menos um mês na tabela principal para habilitar a visualização dos gráficos ano a ano.</p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Preparar dados ordenados do mais antigo ao recente
+                const chartData = [...validYears]
+                  .sort((a, b) => a.year - b.year)
+                  .map(yearData => {
+                    let yearTotalResultado = 0;
+                    const yearTotalRX: Record<number, number> = {};
+                    customRules.forEach(r => {
+                      yearTotalRX[r] = 0;
+                    });
+                    let yearTotalOperacoes = 0;
+
+                    yearData.months.forEach(m => {
+                      const res = parseNum(m.resultado);
+                      if (res !== null) {
+                        yearTotalResultado += res;
+                      }
+                      customRules.forEach(r => {
+                        const rx = calcRX(m.resultado, m.ddMax, r);
+                        if (rx !== null) {
+                          yearTotalRX[r] = (yearTotalRX[r] || 0) + rx;
+                        }
+                      });
+                      const ops = parseNum(m.operacoes || '');
+                      if (ops !== null) {
+                        yearTotalOperacoes += ops;
+                      }
+                    });
+
+                    const yearSpreadCost = yearTotalOperacoes * spreadVal;
+                    const yearNetGeral = yearTotalResultado - yearSpreadCost;
+
+                    const row: any = {
+                      name: String(yearData.year),
+                      "Geral": parseFloat(yearNetGeral.toFixed(1)),
+                    };
+
+                    customRules.forEach(r => {
+                      const yearNetRX = (yearTotalRX[r] || 0) - yearSpreadCost;
+                      row[`R-${r}`] = parseFloat(yearNetRX.toFixed(1));
+                    });
+
+                    return row;
+                  });
+
+                const availableScenarios = ['Geral', ...customRules.map(r => `R-${r}`)];
+                
+                const barColors: Record<string, string> = {
+                  "Geral": "#10b981", // Verde Esmeralda para o Geral
+                };
+                customRules.forEach((r, idx) => {
+                  // Cores bem distintas: Laranja, Azul Royal, Rosa Shock, Roxo, Dourado/Amarelo, Turquesa/Ciano
+                  const colors = ["#f97316", "#2563eb", "#ec4899", "#8b5cf6", "#eab308", "#06b6d4"];
+                  barColors[`R-${r}`] = colors[idx % colors.length];
+                });
+
+                const isVisible = (sc: string) => selectedScenarios[sc] !== false;
+                const toggleScenario = (sc: string) => {
+                  setSelectedScenarios(prev => ({
+                    ...prev,
+                    [sc]: !isVisible(sc)
+                  }));
+                };
+
+                const activeBars = availableScenarios.filter(isVisible);
+
+                return (
+                  <div className="space-y-6">
+                    {/* Selector de Abas para os Gráficos */}
+                    <div className="flex border-b border-slate-100 pb-2 gap-2 shrink-0">
+                      <button
+                        onClick={() => setActiveChartTab('bars')}
+                        className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold flex items-center gap-2 transition-all cursor-pointer ${
+                          activeChartTab === 'bars'
+                            ? 'bg-indigo-50 text-indigo-700 shadow-3xs border border-indigo-200'
+                            : 'bg-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <BarChart3 size={16} />
+                        Resultado Individual Anual (Barras)
+                      </button>
+                      <button
+                        onClick={() => setActiveChartTab('lines')}
+                        className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold flex items-center gap-2 transition-all cursor-pointer ${
+                          activeChartTab === 'lines'
+                            ? 'bg-indigo-50 text-indigo-700 shadow-3xs border border-indigo-200'
+                            : 'bg-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <TrendingUp size={16} />
+                        Evolução Acumulada / Equity (Linhas)
+                      </button>
+                    </div>
+
+                    {/* Filtros de Cenários */}
+                    <div className="space-y-2 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Selecionar Cenários para Comparar:</span>
+                      <div className="flex flex-wrap gap-2">
+                        {availableScenarios.map(sc => {
+                          const active = isVisible(sc);
+                          const color = barColors[sc];
+                          return (
+                            <button
+                              key={sc}
+                              onClick={() => toggleScenario(sc)}
+                              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                                active 
+                                  ? 'bg-white shadow-3xs border-slate-200 text-slate-800' 
+                                  : 'bg-slate-100/50 border-slate-100 text-slate-400 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span 
+                                className="w-2.5 h-2.5 rounded-full" 
+                                style={{ backgroundColor: active ? color : '#cbd5e1' }}
+                              ></span>
+                              <span>{sc === 'Geral' ? 'Resultado Geral (Normal)' : `Cenário R-${sc.replace('R-', '')}`}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Área do Gráfico */}
+                    <div className="p-4 rounded-xl border border-slate-150 shadow-3xs bg-slate-50/20">
+                      {activeChartTab === 'bars' ? (
+                        <ResponsiveContainer width="100%" height={350}>
+                          <BarChart data={chartData} margin={{ top: 15, right: 10, left: -10, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis 
+                              dataKey="name" 
+                              tickLine={false} 
+                              axisLine={false} 
+                              stroke="#64748b" 
+                              fontSize={12} 
+                              fontWeight="bold" 
+                            />
+                            <YAxis 
+                              tickLine={false} 
+                              axisLine={false} 
+                              stroke="#64748b" 
+                              fontSize={11} 
+                              tickFormatter={(val) => `${val} pips`}
+                            />
+                            <Tooltip 
+                              contentStyle={{ 
+                                backgroundColor: '#ffffff', 
+                                borderRadius: '12px', 
+                                borderColor: '#e2e8f0', 
+                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' 
+                              }}
+                              labelStyle={{ fontWeight: 'black', color: '#1e293b', marginBottom: '4px' }}
+                              itemStyle={{ fontSize: '12px', padding: '2px 0' }}
+                              formatter={(value: any, name: any) => [
+                                <span className="font-bold font-mono">{value >= 0 ? '+' : ''}{value} pips</span>,
+                                <span className="text-slate-500 font-sans font-medium">{name === 'Geral' ? 'Geral' : `Regra ${name}`}</span>
+                              ]}
+                            />
+                            <Legend 
+                              verticalAlign="top" 
+                              height={36} 
+                              iconType="circle"
+                              formatter={(value) => (
+                                <span className="text-xs font-semibold text-slate-600">
+                                  {value === 'Geral' ? 'Resultado Geral' : `Regra ${value}`}
+                                </span>
+                              )}
+                            />
+                            <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />
+                            {activeBars.map(sc => (
+                              <Bar 
+                                key={sc} 
+                                dataKey={sc} 
+                                fill={barColors[sc]} 
+                                radius={[4, 4, 0, 0]}
+                                maxBarSize={45}
+                              />
+                            ))}
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        (() => {
+                          // Calcular acumulado
+                          let runningSums: Record<string, number> = { "Geral": 0 };
+                          customRules.forEach(r => { runningSums[`R-${r}`] = 0; });
+
+                          const cumulativeChartData = chartData.map(row => {
+                            const newRow: any = { name: row.name };
+                            runningSums["Geral"] += (row["Geral"] || 0);
+                            newRow["Geral"] = parseFloat(runningSums["Geral"].toFixed(1));
+
+                            customRules.forEach(r => {
+                              const key = `R-${r}`;
+                              runningSums[key] += (row[key] || 0);
+                              newRow[key] = parseFloat(runningSums[key].toFixed(1));
+                            });
+                            return newRow;
+                          });
+
+                          return (
+                            <ResponsiveContainer width="100%" height={350}>
+                              <LineChart data={cumulativeChartData} margin={{ top: 15, right: 10, left: -10, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis 
+                                  dataKey="name" 
+                                  tickLine={false} 
+                                  axisLine={false} 
+                                  stroke="#64748b" 
+                                  fontSize={12} 
+                                  fontWeight="bold" 
+                                />
+                                <YAxis 
+                                  tickLine={false} 
+                                  axisLine={false} 
+                                  stroke="#64748b" 
+                                  fontSize={11} 
+                                  tickFormatter={(val) => `${val} pips`}
+                                />
+                                <Tooltip 
+                                  contentStyle={{ 
+                                    backgroundColor: '#ffffff', 
+                                    borderRadius: '12px', 
+                                    borderColor: '#e2e8f0', 
+                                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' 
+                                  }}
+                                  labelStyle={{ fontWeight: 'black', color: '#1e293b', marginBottom: '4px' }}
+                                  itemStyle={{ fontSize: '12px', padding: '2px 0' }}
+                                  formatter={(value: any, name: any) => [
+                                    <span className="font-bold font-mono">{value >= 0 ? '+' : ''}{value} pips</span>,
+                                    <span className="text-slate-500 font-sans font-medium">{name === 'Geral' ? 'Acumulado Geral' : `Acumulado ${name}`}</span>
+                                  ]}
+                                />
+                                <Legend 
+                                  verticalAlign="top" 
+                                  height={36} 
+                                  iconType="circle"
+                                  formatter={(value) => (
+                                    <span className="text-xs font-semibold text-slate-600">
+                                      {value === 'Geral' ? 'Acumulado Geral' : `Acumulado ${value}`}
+                                    </span>
+                                  )}
+                                />
+                                <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />
+                                {activeBars.map(sc => (
+                                  <Line 
+                                    key={sc} 
+                                    type="monotone"
+                                    dataKey={sc} 
+                                    stroke={barColors[sc]} 
+                                    strokeWidth={3}
+                                    dot={{ r: 5, strokeWidth: 2, fill: '#ffffff' }}
+                                    activeDot={{ r: 7 }}
+                                  />
+                                ))}
+                              </LineChart>
+                            </ResponsiveContainer>
+                          );
+                        })()
+                      )}
+                    </div>
+
+                    {/* Tabela Comparativa de Valores */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                          {activeChartTab === 'bars' ? 'Tabela de Rentabilidade Anual (Individual)' : 'Tabela de Crescimento Acumulado (Equity)'}
+                        </h4>
+                        <span className="text-[11px] text-indigo-600 bg-indigo-50 font-bold px-2 py-0.5 rounded-md">
+                          Exibindo: {activeChartTab === 'bars' ? 'Anual Individual' : 'Saldos Acumulados'}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto rounded-xl border border-slate-150 shadow-3xs">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="p-3 font-bold text-slate-500 uppercase tracking-wider">Ano</th>
+                              {availableScenarios.map(sc => (
+                                <th key={sc} className="p-3 font-bold text-slate-500 uppercase tracking-wider text-right">
+                                  <span className="flex items-center justify-end gap-1.5">
+                                    <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: barColors[sc] }}></span>
+                                    {sc === 'Geral' ? 'Net Geral' : `Regra ${sc}`}
+                                  </span>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-mono">
+                            {(() => {
+                              // Se for acumulado, construir a mesma tabela com dados acumulados
+                              let displayData = chartData;
+                              if (activeChartTab === 'lines') {
+                                let runningSums: Record<string, number> = { "Geral": 0 };
+                                customRules.forEach(r => { runningSums[`R-${r}`] = 0; });
+
+                                displayData = chartData.map(row => {
+                                  const newRow: any = { name: row.name };
+                                  runningSums["Geral"] += (row["Geral"] || 0);
+                                  newRow["Geral"] = parseFloat(runningSums["Geral"].toFixed(1));
+
+                                  customRules.forEach(r => {
+                                    const key = `R-${r}`;
+                                    runningSums[key] += (row[key] || 0);
+                                    newRow[key] = parseFloat(runningSums[key].toFixed(1));
+                                  });
+                                  return newRow;
+                                });
+                              }
+
+                              return displayData.map((row) => (
+                                <tr key={row.name} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="p-3 font-extrabold text-slate-700 text-sm">{row.name}</td>
+                                  {availableScenarios.map(sc => {
+                                    const val = row[sc] ?? 0;
+                                    const isPos = val >= 0;
+                                    return (
+                                      <td 
+                                        key={sc} 
+                                        className={`p-3 text-right font-bold text-sm ${isPos ? 'text-emerald-600' : 'text-rose-600'}`}
+                                      >
+                                        {isPos ? '+' : ''}{formatNum(val)} <span className="text-[10px] text-slate-400 font-normal font-sans">pips</span>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ));
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
